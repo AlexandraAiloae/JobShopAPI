@@ -1,7 +1,6 @@
 ﻿using JobShopAPI.Models;
 using Microsoft.AspNetCore.Http;
 using System.IO;
-using System.Reflection.PortableExecutable;
 using System.Text;
 using System.Threading.Tasks;
 using Machine = JobShopAPI.Models.Machine;
@@ -34,20 +33,24 @@ namespace JobShopAPI.Services
         private JobShopData ParseJobShopData(string fileContent)
         {
             var jobShopData = new JobShopData();
-            // Split the file content into lines, then immediately filter out comments and empty lines
             var lines = fileContent.Split('\n')
-                                   .Select(line => line.Trim()) // Trim each line to ensure empty lines are correctly identified
+                                   .Select(line => line.Trim())
                                    .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith("#"))
                                    .ToArray();
 
-            // Now, lines array doesn't contain any comments or purely empty lines
-            var machineNamesSectionIndex = Array.FindIndex(lines, line => line.StartsWith("Available machines:")) + 1;
-            var machineFeaturesSectionIndex = Array.FindIndex(lines, line => line.StartsWith("Machine features:"));
-            var partListSectionIndex = Array.FindIndex(lines, line => line.StartsWith("Part list:")) + 1;
-            var partOperationsSectionIndex = Array.FindIndex(lines, line => line.StartsWith("Part operations:"));
+            ExtractMachineNames(lines, jobShopData);
+            FillMachineDetails(lines, jobShopData);
+            ExtractPartListAndQuantities(lines, jobShopData);
+            FillPartOperations(lines, jobShopData);
 
-            // Extract machine names
-            for (int i = machineNamesSectionIndex; i < machineFeaturesSectionIndex && i != -1; i++)
+            return jobShopData;
+        }
+
+        private void ExtractMachineNames(string[] lines, JobShopData jobShopData)
+        {
+            var machineNamesSectionIndex = Array.FindIndex(lines, line => line.StartsWith("Available machines:"));
+            var machineFeaturesSectionIndex = Array.FindIndex(lines, line => line.StartsWith("Machine features:"));
+            for (int i = machineNamesSectionIndex; i < machineFeaturesSectionIndex; i++)
             {
                 var parts = lines[i].Split('.', StringSplitOptions.TrimEntries);
                 if (parts.Length > 1)
@@ -55,60 +58,78 @@ namespace JobShopAPI.Services
                     jobShopData.Machines.Add(new Machine { Name = parts[1] });
                 }
             }
+        }
 
-            // Fill in machine details
+        private void FillMachineDetails(string[] lines, JobShopData jobShopData)
+        {
+            var machineFeaturesSectionIndex = Array.FindIndex(lines, line => line.StartsWith("Machine features:"));
+            var partListSectionIndex = Array.FindIndex(lines, line => line.StartsWith("Part list:"));
             var currentMachineIndex = -1;
-            for (int i = machineFeaturesSectionIndex + 1; i < lines.Length && i != -1; i++)
+            for (int i = machineFeaturesSectionIndex; i < partListSectionIndex; i++)
             {
-                if (lines[i].Contains(':') && int.TryParse(lines[i].Split(':')[0], out var machineIndex))
+                bool isFeatureIndexLine = false;
+
+                if (int.TryParse(lines[i].Split(':')[0], out var machineIndex))
                 {
                     currentMachineIndex = machineIndex - 1;
+                    isFeatureIndexLine = true;
                 }
-                else if (lines[i].Contains("Capacity") && lines[i].Contains("one part at a time"))
+
+                if (isFeatureIndexLine || currentMachineIndex >= 0 && currentMachineIndex < jobShopData.Machines.Count)
                 {
-                    if (currentMachineIndex >= 0 && currentMachineIndex < jobShopData.Machines.Count)
-                    {
-                        jobShopData.Machines[currentMachineIndex].Capacity = 1;
-                    }
-                }
-                else if (lines[i].Contains("Cooldown time"))
-                {
-                    if (currentMachineIndex >= 0 && currentMachineIndex < jobShopData.Machines.Count)
-                    {
-                        var cooldownTimeStr = lines[i].Split(':')[1].Trim();
-                        if (cooldownTimeStr.Equals("none", StringComparison.OrdinalIgnoreCase))
-                        {
-                            jobShopData.Machines[currentMachineIndex].CooldownTime = 0;
-                        }
-                        else
-                        {
-                            var cooldownParts = cooldownTimeStr.Split(' ');
-                            if (cooldownParts.Length > 0 && int.TryParse(cooldownParts[0], out var cooldownSeconds))
-                            {
-                                jobShopData.Machines[currentMachineIndex].CooldownTime = cooldownSeconds;
-                            }
-                        }
-                    }
+                    UpdateMachineDetails(lines[i], jobShopData.Machines[currentMachineIndex]);
+
                 }
             }
+        }
 
-            // Extract part list and quantities
-            for (int i = partListSectionIndex; i < partOperationsSectionIndex && i != -1; i++)
+
+        private void UpdateMachineDetails(string line, Machine machine)
+        {
+            if (line.Contains("Capacity") && line.Contains("one part at a time"))
+            {
+                machine.Capacity = 1;
+            }
+            else if (line.Contains("Cooldown time"))
+            {
+                var cooldownTimeStr = line.Split(':')[1].Trim();
+                machine.CooldownTime = cooldownTimeStr.Equals("none", StringComparison.OrdinalIgnoreCase) ? 0 : ParseCooldownTime(cooldownTimeStr);
+            }
+        }
+
+        private int ParseCooldownTime(string cooldownTimeStr)
+        {
+            var cooldownParts = cooldownTimeStr.Split(' ');
+            if (cooldownParts.Length > 0 && int.TryParse(cooldownParts[0], out var cooldownSeconds))
+            {
+                return cooldownSeconds;
+            }
+            return 0;
+        }
+
+        private void ExtractPartListAndQuantities(string[] lines, JobShopData jobShopData)
+        {
+            var partListSectionIndex = Array.FindIndex(lines, line => line.StartsWith("Part list:"));
+            var partOperationsSectionIndex = Array.FindIndex(lines, line => line.StartsWith("Part operations:"));
+            for (int i = partListSectionIndex; i < partOperationsSectionIndex; i++)
             {
                 var parts = lines[i].Split('-', StringSplitOptions.TrimEntries);
-                if (parts.Length == 2)
+                if (parts.Length == 2 && int.TryParse(parts[1].Split(' ')[0], out var quantity))
                 {
                     var partInfo = parts[0].Split('.', StringSplitOptions.TrimEntries);
-                    if (partInfo.Length > 1 && int.TryParse(parts[1].Split(' ')[0], out var quantity))
+                    if (partInfo.Length > 1)
                     {
                         jobShopData.Parts.Add(new Part { Name = partInfo[1].Trim(), Quantity = quantity });
                     }
                 }
             }
+        }
 
-            // Fill in part operations
+        private void FillPartOperations(string[] lines, JobShopData jobShopData)
+        {
+            var partOperationsSectionIndex = Array.FindIndex(lines, line => line.StartsWith("Part operations:"));
             var currentPartIndex = -1;
-            for (int i = partOperationsSectionIndex + 1; i < lines.Length && i != -1; i++)
+            for (int i = partOperationsSectionIndex; i < lines.Length; i++)
             {
                 bool isPartIndexLine = false;
                 if (lines[i].Contains(':') && int.TryParse(lines[i].Split(':')[0], out var partIndex))
@@ -117,32 +138,30 @@ namespace JobShopAPI.Services
                     isPartIndexLine = true;
                 }
 
-                // Check if the line contains an operation. This check is done in both conditions: 
-                // when the line is a part index (which might also include an operation), and 
-                // for all subsequent lines that don't change the currentPartIndex.
                 if ((isPartIndexLine || lines[i].Contains("seconds")) && currentPartIndex >= 0 && currentPartIndex < jobShopData.Parts.Count)
                 {
-                    // Try to parse the operation from the current line.
-                    // When isPartIndexLine is true, the operation might be on the same line as the part index.
                     var operationInfo = isPartIndexLine ? lines[i].Substring(lines[i].IndexOf(':') + 1).Trim() : lines[i];
-                    var operationParts = operationInfo.Split(':', StringSplitOptions.TrimEntries);
-                    if (operationParts.Length == 2)
-                    {
-                        var durationParts = operationParts[1].Trim().Split(' ');
-                        if (durationParts.Length > 1 && int.TryParse(durationParts[0], out var duration))
-                        {
-                            jobShopData.Parts[currentPartIndex].Operations.Add(new Operation
-                            {
-                                MachineName = operationParts[0].Trim(),
-                                Duration = duration
-                            });
-                        }
-                    }
+                    AddOperationToPart(operationInfo, jobShopData.Parts[currentPartIndex]);
                 }
             }
+        }
 
-
-            return jobShopData;
+        private void AddOperationToPart(string operationInfo, Part part)
+        {
+            var operationParts = operationInfo.Split(':', StringSplitOptions.TrimEntries);
+            if (operationParts.Length == 2)
+            {
+                var machineName = operationParts[0].Trim().TrimStart('-').Trim();
+                var durationParts = operationParts[1].Trim().Split(' ');
+                if (durationParts.Length > 1 && int.TryParse(durationParts[0], out var duration))
+                {
+                    part.Operations.Add(new Operation
+                    {
+                        MachineName = machineName,
+                        Duration = duration
+                    });
+                }
+            }
         }
 
     }
