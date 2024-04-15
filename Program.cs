@@ -10,7 +10,8 @@ builder.Logging.AddDebug();
 
 // Add services to the container.
 builder.Services.AddControllers();
-builder.Services.AddScoped<IJobShopService, FileService>();
+builder.Services.AddScoped<IFileService, FileService>();
+builder.Services.AddScoped<ISimpleSchedulerService, SimpleSchedulerService>();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

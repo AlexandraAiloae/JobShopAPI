@@ -6,11 +6,13 @@ using JobShopAPI.Services; // Assuming your service is in this namespace
 [Route("api/[controller]")]
 public class FileController : ControllerBase
 {
-    private readonly IJobShopService _jobShopService;
+    private readonly IFileService _fileService;
+    private readonly ISimpleSchedulerService _simpleSchedulerService; 
 
-    public FileController(IJobShopService jobShopService)
+    public FileController(IFileService fileService, ISimpleSchedulerService simpleSchedulerService)
     {
-        _jobShopService = jobShopService;
+        _fileService = fileService;
+        _simpleSchedulerService = simpleSchedulerService;
     }
 
     [HttpPost("upload")]
@@ -23,8 +25,20 @@ public class FileController : ControllerBase
 
         try
         {
-            var jobShopData = await _jobShopService.ProcessUploadedFileAsync(file);
-            return Ok(jobShopData); // You might want to return something else
+            // Parsing the uploaded file
+            var jobShopData = await _fileService.ProcessUploadedFileAsync(file);
+
+            // Scheduling operations based on parsed data
+            var scheduleData = _simpleSchedulerService.ScheduleOperations(jobShopData);
+
+            // Creating a response model that includes both data and schedule
+            var responseModel = new
+            {
+                JobShopData = jobShopData,
+                ScheduleData = scheduleData
+            };
+
+            return Ok(responseModel);
         }
         catch (Exception ex)
         {
