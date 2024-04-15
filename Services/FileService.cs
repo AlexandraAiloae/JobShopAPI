@@ -12,7 +12,7 @@ namespace JobShopAPI.Services
         Task<JobShopData> ProcessUploadedFileAsync(IFormFile file);
     }
 
-    public class JobShopService : IJobShopService
+    public class FileService : IJobShopService
     {
         public async Task<JobShopData> ProcessUploadedFileAsync(IFormFile file)
         {

@@ -4,11 +4,11 @@ using JobShopAPI.Services; // Assuming your service is in this namespace
 
 [ApiController]
 [Route("api/[controller]")]
-public class JobShopController : ControllerBase
+public class FileController : ControllerBase
 {
     private readonly IJobShopService _jobShopService;
 
-    public JobShopController(IJobShopService jobShopService)
+    public FileController(IJobShopService jobShopService)
     {
         _jobShopService = jobShopService;
     }
