@@ -29,7 +29,7 @@ public class FileController : ControllerBase
             var jobShopData = await _fileService.ProcessUploadedFileAsync(file);
 
             // Scheduling operations based on parsed data
-            var scheduleData = _simpleSchedulerService.ScheduleOperations(jobShopData);
+            var scheduleData = _simpleSchedulerService.ScheduleSimpleJobShop(jobShopData);
 
             // Creating a response model that includes both data and schedule
             var responseModel = new

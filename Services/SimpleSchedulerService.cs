@@ -2,60 +2,101 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Google.OrTools.Sat;
 
 namespace JobShopAPI.Services
 {
     public interface ISimpleSchedulerService
     {
-        ScheduleData ScheduleOperations(JobShopData jobShopData);
+        ScheduleData ScheduleSimpleJobShop(JobShopData jobShopData);
     }
 
     public class SimpleSchedulerService : ISimpleSchedulerService
     {
-        public ScheduleData ScheduleOperations(JobShopData jobShopData)
+        public ScheduleData ScheduleSimpleJobShop(JobShopData jobShopData)
         {
-            var schedule = new ScheduleData();
-            var machineAvailability = new Dictionary<string, int>();
+            var model = new CpModel();
+            var jobs = jobShopData.Parts; // Using parts as jobs
+            int horizon = jobs.Sum(job => job.Operations.Sum(op => op.Duration) * job.Quantity);
+            var allTasks = new Dictionary<(int, int, int), (IntVar start, IntVar end, IntervalVar interval)>();
+            var machineToIntervals = new Dictionary<int, List<IntervalVar>>();
 
-            // Initialize machine availability
-            foreach (var machine in jobShopData.Machines)
+            foreach (var job in jobs.Select((job, idx) => (job, idx)))
             {
-                machineAvailability[machine.Name] = 0; // All machines are available at time 0
-            }
-
-            foreach (var part in jobShopData.Parts.OrderBy(p => p.Operations.Sum(o => o.Duration)))
-            {
-                // Process each quantity of the part
-                for (int quantityIndex = 0; quantityIndex < part.Quantity; quantityIndex++)
+                int jobIdx = job.idx;
+                for (int instance = 0; instance < job.job.Quantity; instance++)
                 {
-                    int partStartTime = machineAvailability.Values.Max(); // Start at the latest time any machine becomes available
-
-                    foreach (var operation in part.Operations)
+                    IntervalVar lastInterval = null;
+                    foreach (var task in job.job.Operations.Select((op, idx) => (op, idx)))
                     {
-                        // The operation start time is the maximum of the part start time or when the specific machine is next available
-                        int startTime = Math.Max(partStartTime, machineAvailability[operation.MachineName]);
-
-                        int endTime = startTime + operation.Duration;
-
-                        schedule.Operations.Add(new ScheduledOperation
+                        var machineName = task.op.MachineName;
+                        var machineId = jobShopData.Machines.FindIndex(m => m.Name == machineName);
+                        if (machineId == -1)
                         {
-                            PartName = part.Name,
-                            MachineName = operation.MachineName,
-                            StartTime = FormatTime(startTime),
-                            EndTime = FormatTime(endTime)
-                        });
+                            Console.WriteLine($"Error: Machine name '{machineName}' not found in the machine list.");
+                        }
 
-                        // Update machine availability for the next operation
-                        machineAvailability[operation.MachineName] = endTime + GetCooldownTime(operation.MachineName, jobShopData);
+                        var duration = task.op.Duration + GetCooldownTime(machineName, jobShopData);
+                        var suffix = $"_{jobIdx}_{instance}_{task.idx}";
+                        var startVar = model.NewIntVar(0, horizon, $"start{suffix}");
+                        var endVar = model.NewIntVar(0, horizon, $"end{suffix}");
+                        var intervalVar = model.NewIntervalVar(startVar, duration, endVar, $"interval{suffix}");
 
-                        // Update partStartTime to ensure the next operation starts right after the current one ends
-                        partStartTime = endTime;
+                        allTasks.Add((jobIdx, instance, task.idx), (startVar, endVar, intervalVar));
+                        if (!machineToIntervals.ContainsKey(machineId))
+                        {
+                            machineToIntervals[machineId] = new List<IntervalVar>();
+                        }
+                        machineToIntervals[machineId].Add(intervalVar);
+
+                        if (lastInterval != null)
+                        {
+                            model.Add(startVar == lastInterval.EndExpr());
+                        }
+                        lastInterval = intervalVar;
                     }
                 }
             }
 
-            // Compute the total processing time as the maximum of all end times
-            schedule.TotalProcessingTime = FormatTime(machineAvailability.Values.Max());
+            foreach (var kvp in machineToIntervals)
+            {
+                var intervals = kvp.Value;
+                model.AddNoOverlap(intervals);
+            }
+
+            var jobEnds = new List<IntVar>();
+            foreach (var job in jobs.Select((job, idx) => (job, idx)))
+            {
+                for (int instance = 0; instance < job.job.Quantity; instance++)
+                {
+                    jobEnds.Add(allTasks[(job.idx, instance, job.job.Operations.Count - 1)].end);
+                }
+            }
+
+            var makespan = model.NewIntVar(0, horizon, "makespan");
+            model.AddMaxEquality(makespan, jobEnds);
+            model.Minimize(makespan);
+
+            var solver = new CpSolver();
+            var status = solver.Solve(model);
+            var schedule = new ScheduleData();
+            if (status == CpSolverStatus.Optimal || status == CpSolverStatus.Feasible)
+            {
+                schedule.TotalProcessingTime = FormatTime((int)solver.ObjectiveValue);
+                foreach (var task in allTasks)
+                {
+                    var partName = jobs[task.Key.Item1].Name;
+                    var machineIndex = int.Parse(task.Value.interval.Name().Split('_').Last());
+                    var machineName = jobShopData.Machines[machineIndex].Name;
+                    schedule.Operations.Add(new ScheduledOperation
+                    {
+                        PartName = partName,
+                        MachineName = machineName,
+                        StartTime = FormatTime((int)solver.Value(task.Value.start)),
+                        EndTime = FormatTime((int)solver.Value(task.Value.end))
+                    });
+                }
+            }
             return schedule;
         }
 
