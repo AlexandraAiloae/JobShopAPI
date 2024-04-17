@@ -6,13 +6,15 @@ using JobShopAPI.Services; // Assuming your service is in this namespace
 [Route("api/[controller]")]
 public class FileController : ControllerBase
 {
-    private readonly IFileService _fileService;
+    private readonly IFileServiceInputOne _fileServiceInputOne;
     private readonly ISimpleSchedulerService _simpleSchedulerService; 
+    private readonly IFileServiceInputTwo _fileServiceInputTwo;
 
-    public FileController(IFileService fileService, ISimpleSchedulerService simpleSchedulerService)
+    public FileController(IFileServiceInputOne fileServiceInputOne, ISimpleSchedulerService simpleSchedulerService, IFileServiceInputTwo fileServiceInputTwo)
     {
-        _fileService = fileService;
+        _fileServiceInputOne = fileServiceInputOne;
         _simpleSchedulerService = simpleSchedulerService;
+        _fileServiceInputTwo = fileServiceInputTwo;
     }
 
     [HttpPost("upload")]
@@ -25,8 +27,24 @@ public class FileController : ControllerBase
 
         try
         {
-            // Parsing the uploaded file
-            var jobShopData = await _fileService.ProcessUploadedFileAsync(file);
+            JobShopData jobShopData = null;
+
+            // Determine the file processing service based on the file name
+            if (file.FileName == "Input_One.txt")
+            {
+                // Processing for Input_One.txt
+                jobShopData = await _fileServiceInputOne.ProcessUploadedFileAsync(file);
+            }
+            else if (file.FileName == "Input_Two.txt")
+            {
+                // Processing for Input_Two.txt
+                jobShopData = await _fileServiceInputTwo.ProcessUploadedFileAsync(file);
+            }
+            else
+            {
+                // Handle unsupported file names
+                return BadRequest("Unsupported file name.");
+            }
 
             // Scheduling operations based on parsed data
             var scheduleData = _simpleSchedulerService.ScheduleSimpleJobShop(jobShopData);

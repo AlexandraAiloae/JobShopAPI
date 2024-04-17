@@ -7,12 +7,12 @@ using Machine = JobShopAPI.Models.Machine;
 
 namespace JobShopAPI.Services
 {
-    public interface IFileService
+    public interface IFileServiceInputOne
     {
         Task<JobShopData> ProcessUploadedFileAsync(IFormFile file);
     }
 
-    public class FileService : IFileService
+    public class FileServiceInputOne : IFileServiceInputOne
     {
         public async Task<JobShopData> ProcessUploadedFileAsync(IFormFile file)
         {
