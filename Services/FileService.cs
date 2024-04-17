@@ -7,12 +7,12 @@ using Machine = JobShopAPI.Models.Machine;
 
 namespace JobShopAPI.Services
 {
-    public interface IJobShopService
+    public interface IFileService
     {
         Task<JobShopData> ProcessUploadedFileAsync(IFormFile file);
     }
 
-    public class FileService : IJobShopService
+    public class FileService : IFileService
     {
         public async Task<JobShopData> ProcessUploadedFileAsync(IFormFile file)
         {
@@ -143,6 +143,35 @@ namespace JobShopAPI.Services
                     var operationInfo = isPartIndexLine ? lines[i].Substring(lines[i].IndexOf(':') + 1).Trim() : lines[i];
                     AddOperationToPart(operationInfo, jobShopData.Parts[currentPartIndex]);
                 }
+            }
+
+            // After processing all parts, check and add operations with duration 0 for missing machines
+            foreach (var part in jobShopData.Parts)
+            {
+                var mentionedMachines = new HashSet<string>(part.Operations.Select(op => op.MachineName));
+                var availableMachines = new HashSet<string>(jobShopData.Machines.Select(machine => machine.Name));
+
+                // Find missing machines and add operations with duration 0
+                foreach (var machineName in availableMachines.Except(mentionedMachines))
+                {
+                    part.Operations.Add(new Operation
+                    {
+                        MachineName = machineName,
+                        Duration = 0
+                    });
+                }
+
+                // Reorder the operations to match the order of available machines
+                var orderedOperations = new List<Operation>();
+                foreach (var machine in jobShopData.Machines)
+                {
+                    var operation = part.Operations.FirstOrDefault(op => op.MachineName == machine.Name);
+                    if (operation != null)
+                    {
+                        orderedOperations.Add(operation);
+                    }
+                }
+                part.Operations = orderedOperations;
             }
         }
 
