@@ -17,32 +17,58 @@ namespace JobShopAPI.Services
         {
             var model = new CpModel();
             var jobs = jobShopData.Parts; // Using parts as jobs
-            int horizon = jobs.Sum(job => job.Operations.Sum(op => op.Duration) * job.Quantity);
+            int horizon = CalculateHorizon(jobs, jobShopData);
             var allTasks = new Dictionary<(int, int, int), (IntVar start, IntVar end, IntervalVar interval)>();
             var machineToIntervals = new Dictionary<int, List<IntervalVar>>();
 
-            foreach (var job in jobs.Select((job, idx) => (job, idx)))
+            CreateTasksAndIntervals(model, jobs, horizon, allTasks, machineToIntervals, jobShopData);
+
+            AddNoOverlapConstraint(model, machineToIntervals);
+
+            var makespan = AddMakespanObjective(model, jobs, allTasks, horizon);
+
+            var solver = new CpSolver();
+            var status = solver.Solve(model);
+
+            var schedule = new ScheduleData();
+            if (status == CpSolverStatus.Optimal || status == CpSolverStatus.Feasible)
             {
-                int jobIdx = job.idx;
-                for (int instance = 0; instance < job.job.Quantity; instance++)
+                PopulateScheduleData(schedule, jobs, allTasks, solver, jobShopData);
+            }
+            return schedule;
+        }
+
+        private int CalculateHorizon(IEnumerable<Part> jobs, JobShopData jobShopData)
+        {
+            return jobs.Sum(job => job.Operations.Sum(op => op.Duration) * job.Quantity) +
+                   jobs.Sum(job => job.Operations.Sum(op => GetCooldownTime(op.MachineName, jobShopData)));
+        }
+
+        private void CreateTasksAndIntervals(CpModel model, IEnumerable<Part> jobs, int horizon,
+                                             Dictionary<(int, int, int), (IntVar start, IntVar end, IntervalVar interval)> allTasks,
+                                             Dictionary<int, List<IntervalVar>> machineToIntervals, JobShopData jobShopData)
+        {
+            foreach (var (job, jobIdx) in jobs.Select((job, idx) => (job, idx)))
+            {
+                for (int instance = 0; instance < job.Quantity; instance++)
                 {
                     IntervalVar lastInterval = null;
-                    foreach (var task in job.job.Operations.Select((op, idx) => (op, idx)))
+                    foreach (var (op, opIdx) in job.Operations.Select((op, idx) => (op, idx)))
                     {
-                        var machineName = task.op.MachineName;
+                        var machineName = op.MachineName;
                         var machineId = jobShopData.Machines.FindIndex(m => m.Name == machineName);
                         if (machineId == -1)
                         {
                             Console.WriteLine($"Error: Machine name '{machineName}' not found in the machine list.");
                         }
 
-                        var duration = task.op.Duration + GetCooldownTime(machineName, jobShopData);
-                        var suffix = $"_{jobIdx}_{instance}_{task.idx}";
+                        var duration = op.Duration + GetCooldownTime(machineName, jobShopData);
+                        var suffix = $"_{jobIdx}_{instance}_{opIdx}";
                         var startVar = model.NewIntVar(0, horizon, $"start{suffix}");
                         var endVar = model.NewIntVar(0, horizon, $"end{suffix}");
                         var intervalVar = model.NewIntervalVar(startVar, duration, endVar, $"interval{suffix}");
 
-                        allTasks.Add((jobIdx, instance, task.idx), (startVar, endVar, intervalVar));
+                        allTasks.Add((jobIdx, instance, opIdx), (startVar, endVar, intervalVar));
                         if (!machineToIntervals.ContainsKey(machineId))
                         {
                             machineToIntervals[machineId] = new List<IntervalVar>();
@@ -57,47 +83,54 @@ namespace JobShopAPI.Services
                     }
                 }
             }
+        }
 
-            foreach (var kvp in machineToIntervals)
+        private void AddNoOverlapConstraint(CpModel model, Dictionary<int, List<IntervalVar>> machineToIntervals)
+        {
+            foreach (var intervals in machineToIntervals.Values)
             {
-                var intervals = kvp.Value;
                 model.AddNoOverlap(intervals);
             }
+        }
 
+        private IntVar AddMakespanObjective(CpModel model, IEnumerable<Part> jobs,
+                                            Dictionary<(int, int, int), (IntVar start, IntVar end, IntervalVar interval)> allTasks,
+                                            int horizon)
+        {
             var jobEnds = new List<IntVar>();
-            foreach (var job in jobs.Select((job, idx) => (job, idx)))
+            foreach (var (job, jobIdx) in jobs.Select((job, idx) => (job, idx)))
             {
-                for (int instance = 0; instance < job.job.Quantity; instance++)
+                for (int instance = 0; instance < job.Quantity; instance++)
                 {
-                    jobEnds.Add(allTasks[(job.idx, instance, job.job.Operations.Count - 1)].end);
+                    jobEnds.Add(allTasks[(jobIdx, instance, job.Operations.Count - 1)].end);
                 }
             }
 
             var makespan = model.NewIntVar(0, horizon, "makespan");
             model.AddMaxEquality(makespan, jobEnds);
             model.Minimize(makespan);
+            return makespan;
+        }
 
-            var solver = new CpSolver();
-            var status = solver.Solve(model);
-            var schedule = new ScheduleData();
-            if (status == CpSolverStatus.Optimal || status == CpSolverStatus.Feasible)
+        private void PopulateScheduleData(ScheduleData schedule, IEnumerable<Part> jobs,
+                                          Dictionary<(int, int, int), (IntVar start, IntVar end, IntervalVar interval)> allTasks,
+                                          CpSolver solver, JobShopData jobShopData)
+        {
+            schedule.TotalProcessingTime = FormatTime((int)solver.ObjectiveValue);
+            foreach (var task in allTasks)
             {
-                schedule.TotalProcessingTime = FormatTime((int)solver.ObjectiveValue);
-                foreach (var task in allTasks)
+                var (jobIdx, instance, taskIdx) = task.Key;
+                var partName = jobs.ElementAt(jobIdx).Name;
+                var machineIndex = int.Parse(task.Value.interval.Name().Split('_').Last());
+                var machineName = jobShopData.Machines[machineIndex].Name;
+                schedule.Operations.Add(new ScheduledOperation
                 {
-                    var partName = jobs[task.Key.Item1].Name;
-                    var machineIndex = int.Parse(task.Value.interval.Name().Split('_').Last());
-                    var machineName = jobShopData.Machines[machineIndex].Name;
-                    schedule.Operations.Add(new ScheduledOperation
-                    {
-                        PartName = partName,
-                        MachineName = machineName,
-                        StartTime = FormatTime((int)solver.Value(task.Value.start)),
-                        EndTime = FormatTime((int)solver.Value(task.Value.end))
-                    });
-                }
+                    PartName = partName,
+                    MachineName = machineName,
+                    StartTime = FormatTime((int)solver.Value(task.Value.start)),
+                    EndTime = FormatTime((int)solver.Value(task.Value.end))
+                });
             }
-            return schedule;
         }
 
         private string FormatTime(int totalSeconds)
