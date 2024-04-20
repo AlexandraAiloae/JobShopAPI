@@ -1,8 +1,5 @@
 ﻿using JobShopAPI.Models;
-using Microsoft.AspNetCore.Http;
-using System.IO;
 using System.Text;
-using System.Threading.Tasks;
 using Machine = JobShopAPI.Models.Machine;
 
 namespace JobShopAPI.Services
@@ -16,7 +13,6 @@ namespace JobShopAPI.Services
     {
         public async Task<JobShopData> ProcessUploadedFileAsync(IFormFile file)
         {
-            // Read the content of the uploaded file
             string fileContent;
             using (var stream = new MemoryStream())
             {
@@ -24,7 +20,6 @@ namespace JobShopAPI.Services
                 fileContent = Encoding.UTF8.GetString(stream.ToArray());
             }
 
-            // Use the parsing logic to populate JobShopData
             var jobShopData = ParseJobShopData(fileContent);
 
             return jobShopData;
@@ -98,7 +93,7 @@ namespace JobShopAPI.Services
                 }
                 else if (line.Contains("no limit"))
                 {
-                    machine.Capacity = int.MaxValue; // Set capacity to a large value representing infinity
+                    machine.Capacity = int.MaxValue; 
                 }
             }
             else if (line.Contains("Cooldown time"))
@@ -141,7 +136,6 @@ namespace JobShopAPI.Services
             var partOperationsSectionIndex = Array.FindIndex(lines, line => line.StartsWith("Part operations:"));
             var currentPartIndex = -1;
 
-            // Available machine names
             var availableMachineNames = jobShopData.Machines.Select(m => m.Name).ToList();
 
             for (int i = partOperationsSectionIndex; i < lines.Length; i++)
@@ -168,7 +162,6 @@ namespace JobShopAPI.Services
             {
                 var machineName = operationParts[0].Trim().TrimStart('-').Trim();
 
-                // Find the closest match among available machine names
                 var closestMatch = FindClosestMatch(machineName, availableMachineNames);
 
                 var durationParts = operationParts[1].Trim().Split(' ');

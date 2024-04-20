@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using JobShopAPI.Models;
-using JobShopAPI.Services; // Assuming your service is in this namespace
+using JobShopAPI.Services; 
 
 [ApiController]
 [Route("api/[controller]")]
@@ -9,12 +9,14 @@ public class FileController : ControllerBase
     private readonly IFileServiceInputOne _fileServiceInputOne;
     private readonly ISimpleSchedulerService _simpleSchedulerService; 
     private readonly IFileServiceInputTwo _fileServiceInputTwo;
+    private readonly IFlexibleSchedulerService _flexibleSchedulerService;
 
-    public FileController(IFileServiceInputOne fileServiceInputOne, ISimpleSchedulerService simpleSchedulerService, IFileServiceInputTwo fileServiceInputTwo)
+    public FileController(IFileServiceInputOne fileServiceInputOne, ISimpleSchedulerService simpleSchedulerService, IFileServiceInputTwo fileServiceInputTwo, IFlexibleSchedulerService flexibleSchedulerService)
     {
         _fileServiceInputOne = fileServiceInputOne;
         _simpleSchedulerService = simpleSchedulerService;
         _fileServiceInputTwo = fileServiceInputTwo;
+        _flexibleSchedulerService = flexibleSchedulerService;
     }
 
     [HttpPost("upload")]
@@ -28,28 +30,23 @@ public class FileController : ControllerBase
         try
         {
             JobShopData jobShopData = null;
+            ScheduleData scheduleData = null;
 
-            // Determine the file processing service based on the file name
             if (file.FileName == "Input_One.txt")
             {
-                // Processing for Input_One.txt
                 jobShopData = await _fileServiceInputOne.ProcessUploadedFileAsync(file);
+                scheduleData = _simpleSchedulerService.ScheduleSimpleJobShop(jobShopData);
             }
             else if (file.FileName == "Input_Two.txt")
             {
-                // Processing for Input_Two.txt
                 jobShopData = await _fileServiceInputTwo.ProcessUploadedFileAsync(file);
+                scheduleData = _flexibleSchedulerService.ScheduleFlexibleJobShop(jobShopData);
+
             }
             else
             {
-                // Handle unsupported file names
                 return BadRequest("Unsupported file name.");
             }
-
-            // Scheduling operations based on parsed data
-            var scheduleData = _simpleSchedulerService.ScheduleSimpleJobShop(jobShopData);
-
-            // Creating a response model that includes both data and schedule
             var responseModel = new
             {
                 JobShopData = jobShopData,

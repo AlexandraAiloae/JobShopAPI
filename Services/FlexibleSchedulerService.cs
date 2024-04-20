@@ -3,17 +3,17 @@ using Google.OrTools.Sat;
 
 namespace JobShopAPI.Services
 {
-    public interface ISimpleSchedulerService
+    public interface IFlexibleSchedulerService
     {
-        ScheduleData ScheduleSimpleJobShop(JobShopData jobShopData);
+        ScheduleData ScheduleFlexibleJobShop(JobShopData jobShopData);
     }
 
-    public class SimpleSchedulerService : ISimpleSchedulerService
+    public class FlexibleSchedulerService : IFlexibleSchedulerService
     {
-        public ScheduleData ScheduleSimpleJobShop(JobShopData jobShopData)
+        public ScheduleData ScheduleFlexibleJobShop(JobShopData jobShopData)
         {
             var model = new CpModel();
-            var jobs = jobShopData.Parts; // Using parts as jobs
+            var jobs = jobShopData.Parts;
             int horizon = CalculateHorizon(jobs, jobShopData);
             var allTasks = new Dictionary<(int, int, int), (IntVar start, IntVar end, IntervalVar interval)>();
             var machineToIntervals = new Dictionary<int, List<IntervalVar>>();
@@ -35,6 +35,7 @@ namespace JobShopAPI.Services
             return schedule;
         }
 
+
         private int CalculateHorizon(IEnumerable<Part> jobs, JobShopData jobShopData)
         {
             return jobs.Sum(job => job.Operations.Sum(op => op.Duration) * job.Quantity) +
@@ -42,14 +43,16 @@ namespace JobShopAPI.Services
         }
 
         private void CreateTasksAndIntervals(CpModel model, IEnumerable<Part> jobs, int horizon,
-                                             Dictionary<(int, int, int), (IntVar start, IntVar end, IntervalVar interval)> allTasks,
-                                             Dictionary<int, List<IntervalVar>> machineToIntervals, JobShopData jobShopData)
+                                     Dictionary<(int, int, int), (IntVar start, IntVar end, IntervalVar interval)> allTasks,
+                                     Dictionary<int, List<IntervalVar>> machineToIntervals, JobShopData jobShopData)
         {
             foreach (var (job, jobIdx) in jobs.Select((job, idx) => (job, idx)))
             {
                 for (int instance = 0; instance < job.Quantity; instance++)
                 {
                     IntervalVar lastInterval = null;
+                    IntVar lastEndVar = null; 
+
                     foreach (var (op, opIdx) in job.Operations.Select((op, idx) => (op, idx)))
                     {
                         var machineName = op.MachineName;
@@ -74,13 +77,16 @@ namespace JobShopAPI.Services
 
                         if (lastInterval != null)
                         {
-                            model.Add(startVar == lastInterval.EndExpr());
+                            model.Add(startVar >= lastEndVar);
                         }
+
                         lastInterval = intervalVar;
+                        lastEndVar = endVar; 
                     }
                 }
             }
         }
+
 
         private void AddNoOverlapConstraint(CpModel model, Dictionary<int, List<IntervalVar>> machineToIntervals)
         {
@@ -91,8 +97,8 @@ namespace JobShopAPI.Services
         }
 
         private IntVar AddMakespanObjective(CpModel model, IEnumerable<Part> jobs,
-                                            Dictionary<(int, int, int), (IntVar start, IntVar end, IntervalVar interval)> allTasks,
-                                            int horizon)
+                                             Dictionary<(int, int, int), (IntVar start, IntVar end, IntervalVar interval)> allTasks,
+                                             int horizon)
         {
             var jobEnds = new List<IntVar>();
             foreach (var (job, jobIdx) in jobs.Select((job, idx) => (job, idx)))
@@ -110,25 +116,27 @@ namespace JobShopAPI.Services
         }
 
         private void PopulateScheduleData(ScheduleData schedule, IEnumerable<Part> jobs,
-                                          Dictionary<(int, int, int), (IntVar start, IntVar end, IntervalVar interval)> allTasks,
-                                          CpSolver solver, JobShopData jobShopData)
+                                 Dictionary<(int, int, int), (IntVar start, IntVar end, IntervalVar interval)> allTasks,
+                                 CpSolver solver, JobShopData jobShopData)
         {
             schedule.TotalProcessingTime = FormatTime((int)solver.ObjectiveValue);
             foreach (var task in allTasks)
             {
                 var (jobIdx, instance, taskIdx) = task.Key;
                 var partName = jobs.ElementAt(jobIdx).Name;
-                var machineIndex = int.Parse(task.Value.interval.Name().Split('_').Last());
-                var machineName = jobShopData.Machines[machineIndex].Name;
+                var machineName = jobs.ElementAt(jobIdx).Operations.ElementAt(taskIdx).MachineName; 
+                var startTime = (int)solver.Value(task.Value.start);
+                var endTime = (int)solver.Value(task.Value.end);
                 schedule.Operations.Add(new ScheduledOperation
                 {
                     PartName = partName,
                     MachineName = machineName,
-                    StartTime = FormatTime((int)solver.Value(task.Value.start)),
-                    EndTime = FormatTime((int)solver.Value(task.Value.end))
+                    StartTime = FormatTime(startTime),
+                    EndTime = FormatTime(endTime)
                 });
             }
         }
+
 
         private string FormatTime(int totalSeconds)
         {
@@ -145,3 +153,6 @@ namespace JobShopAPI.Services
         }
     }
 }
+
+
+
